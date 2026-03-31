@@ -217,12 +217,6 @@ npm run build    # Production build → frontend/dist/
 
 ---
 
-## 🏗️ Architecture
-
-<p align="center">
-  <img src="docs/images/architecture.png" alt="ElastiHone Architecture" width="500">
-</p>
-
 ### Analysis Pipeline
 
 ```
@@ -241,7 +235,7 @@ npm run build    # Production build → frontend/dist/
 
 1. **Rule Import** — Fetches detection rules from Kibana's Detection Engine API or GitHub's protections-artifacts
 2. **Phase 1: Static Analysis** — Executes the rule query against production indices, counts matches and alerts, computes raw noise metrics
-3. **Phase 1.5: Alert Enrichment** — Samples actual Kibana alerts for context (field distributions, affected hosts, `kibana.alert.reason`)
+3. **Phase 1.5: Alert Enrichment** — Samples actual Kibana alerts for context
 4. **Phase 2: AI Investigation** — The LLM agent investigates alert patterns using Elasticsearch tools, classifying each pattern with risk scores
 5. **Phase 3: Report Generation** — Combines static metrics with AI findings into a structured `ImpactReport` with verdict
 6. **Exception Application** — Recommended exclusions are pushed to Kibana via the Exception List API and linked to the rule
