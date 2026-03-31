@@ -1,0 +1,555 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Detection Rule Fine-Tuner</h1>
+    <p class="page-subtitle">Import rules from Elastic Security and analyse noise to reduce false positives</p>
+
+    {% if es_connected %}
+    <div class="es-status-bar status-connected">
+        <span class="status-dot">●</span>
+        Connected{% if es_version %} — <strong>Elasticsearch {{ es_version }}</strong>{% endif %}
+    </div>
+    {% else %}
+    <div class="es-status-bar status-disconnected">
+        <span class="status-dot">●</span>
+        Not connected — <a href="/settings">Configure</a>
+    </div>
+    {% endif %}
+</div>
+
+{% if error %}
+<div class="alert alert-error">
+    <span class="alert-icon">!</span>
+    <span>{{ error }}</span>
+</div>
+{% endif %}
+
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">Select a Rule to Analyse</h2>
+    </div>
+    <div class="panel-body">
+        <form action="/analyse" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="format_hint" value="elastic">
+
+            <div class="import-row">
+                <button type="button" class="btn btn-primary btn-import" id="import-btn" onclick="openImportModal()">
+                    Elastic Rules
+                </button>
+                <button type="button" class="btn btn-behavioral btn-import" id="behavioral-import-btn" onclick="openBehavioralModal()">
+                    Elastic Agent Rules
+                </button>
+                <div class="form-group form-group-sm" style="margin-bottom:0">
+                    <label for="lookback_days" class="form-label">Lookback</label>
+                    <input type="number" name="lookback_days" id="lookback_days" class="form-input form-input-sm"
+                           value="{{ config.es.noise_lookback_days if config else 7 }}" min="1" max="90">
+                </div>
+            </div>
+
+            <div class="form-group" id="imported-rule-group" style="display:none">
+                <div class="form-label-row">
+                    <label class="form-label">Imported Rule: <strong id="imported-rule-name" style="text-transform:none;letter-spacing:0"></strong>
+                        <span id="imported-rule-type" class="type-badge" style="margin-left:8px"></span>
+                        <span id="imported-rule-source" class="source-badge" style="margin-left:6px"></span>
+                    </label>
+                    <button type="button" class="btn btn-sm btn-ghost" onclick="clearRule()">Clear</button>
+                </div>
+                <textarea
+                    name="rule_content"
+                    id="rule_content"
+                    class="form-textarea"
+                    rows="12"
+                    readonly
+                ></textarea>
+
+                <!-- Index Override (Elastic Defend rules) -->
+                <div class="index-override" id="index-override-group" style="display:none">
+                    <label class="form-label">Target Index</label>
+                    <div class="index-radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="index_mode" value="default" checked onchange="toggleCustomIndex()">
+                            <span>Rule default: <code id="default-index-display">logs-endpoint.events.*</code></span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="index_mode" value="custom" onchange="toggleCustomIndex()">
+                            <span>Custom index</span>
+                        </label>
+                    </div>
+                    <input type="text" name="index_override" id="index_override" class="form-input"
+                           placeholder="e.g. logs-endpoint.events.process*, logs-endpoint.events.file*"
+                           style="display:none; margin-top:6px">
+                </div>
+            </div>
+
+            <div id="no-rule-msg" class="no-rule-placeholder">
+                <p>No rule selected. Import from <strong>Elastic Rules</strong> (SIEM) or <strong>Elastic Agent Rules</strong> (Defend).</p>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-glow" id="analyse-btn" disabled>
+                Run Fine-Tuning Analysis
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- ─── Import Rules Modal (Kibana) ──────────────────────────────────── -->
+<div class="modal-overlay" id="import-modal" onclick="closeImportModal(event)">
+    <div class="modal modal-lg" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 class="modal-title">Import Rule from Elastic Security</h3>
+            <button class="modal-close" onclick="closeImportModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- Search + Filters -->
+            <div class="filter-row">
+                <div class="form-group" style="flex:1;margin-bottom:0">
+                    <input type="text" id="rule-search" class="form-input"
+                           placeholder="Search rules by name..."
+                           name="search"
+                           oninput="debounceSearch()">
+                </div>
+            </div>
+            <div class="filter-row">
+                <select id="rule-type-filter" class="form-input form-select"
+                        onchange="debounceSearch()">
+                    <option value="">All Types</option>
+                    <option value="query">KQL</option>
+                    <option value="eql">EQL</option>
+                    <option value="threshold">Threshold</option>
+                    <option value="machine_learning">ML</option>
+                    <option value="new_terms">New Terms</option>
+                    <option value="esql">ES|QL</option>
+                    <option value="threat_match">Indicator</option>
+                    <option value="saved_query">Saved Query</option>
+                </select>
+                <select id="rule-severity-filter" class="form-input form-select"
+                        onchange="debounceSearch()">
+                    <option value="">All Severities</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+                <select id="rule-source-filter" class="form-input form-select"
+                        onchange="debounceSearch()">
+                    <option value="">All Sources</option>
+                    <option value="elastic">Elastic Prebuilt</option>
+                    <option value="custom">Custom Rules</option>
+                </select>
+                <select id="rule-status-filter" class="form-input form-select"
+                        onchange="debounceSearch()">
+                    <option value="">All Status</option>
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                </select>
+            </div>
+
+            <div id="rules-list" class="rules-list-container">
+                <div class="loading-placeholder">Loading rules...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- ─── Behavioral Protections Modal ───────────────────────────────── -->
+<div class="modal-overlay" id="behavioral-modal" onclick="closeBehavioralModal(event)">
+    <div class="modal modal-lg" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div>
+                <h3 class="modal-title">🛡️ Behavioral Protections</h3>
+                <p class="modal-subtitle">Agent-level rules from <code>elastic/protections-artifacts</code> — "Malicious Behavior Detection Alert" rules</p>
+            </div>
+            <button class="modal-close" onclick="closeBehavioralModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- Platform Tabs -->
+            <div class="platform-tabs">
+                <button class="platform-tab active" data-platform="" onclick="setBHPlatform(this, '')">All</button>
+                <button class="platform-tab" data-platform="linux" onclick="setBHPlatform(this, 'linux')">🐧 Linux</button>
+                <button class="platform-tab" data-platform="windows" onclick="setBHPlatform(this, 'windows')">🪟 Windows</button>
+                <button class="platform-tab" data-platform="macos" onclick="setBHPlatform(this, 'macos')">🍎 macOS</button>
+                <button class="platform-tab" data-platform="cross-platform" onclick="setBHPlatform(this, 'cross-platform')">🌐 Cross</button>
+            </div>
+
+            <!-- Search + Tactic Filter -->
+            <div class="filter-row">
+                <div class="form-group" style="flex:1;margin-bottom:0">
+                    <input type="text" id="bh-rule-search" class="form-input"
+                           placeholder="Search behavioral protection rules..."
+                           oninput="debounceBHSearch()">
+                </div>
+                <select id="bh-tactic-filter" class="form-input form-select"
+                        onchange="debounceBHSearch()">
+                    <option value="">All Tactics</option>
+                </select>
+            </div>
+
+            <div id="bh-rules-list" class="rules-list-container">
+                <div class="loading-placeholder">
+                    <div class="spinner"></div>
+                    Fetching behavioral protection rules from GitHub...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+/* ── Kibana Import (existing) ──────────────────────────────────────────── */
+let searchTimeout = null;
+function debounceSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => fetchRules(1), 300);
+}
+function fetchRules(page) {
+    page = page || 1;
+    const search = document.getElementById('rule-search').value;
+    const ruleType = document.getElementById('rule-type-filter').value;
+    const severity = document.getElementById('rule-severity-filter').value;
+    const source = document.getElementById('rule-source-filter').value;
+    const status = document.getElementById('rule-status-filter').value;
+    const params = new URLSearchParams({
+        search, rule_type: ruleType, severity, source, status, page
+    });
+    fetch('/api/rules/list?' + params)
+        .then(r => r.text())
+        .then(html => { document.getElementById('rules-list').innerHTML = html; })
+        .catch(err => {
+            document.getElementById('rules-list').innerHTML =
+                '<div class="test-result-error">Error: ' + err.message + '</div>';
+        });
+}
+function openImportModal() {
+    document.getElementById('import-modal').classList.add('active');
+    fetchRules(1);
+}
+function closeImportModal(e) {
+    if (e && e.target !== document.getElementById('import-modal')) return;
+    document.getElementById('import-modal').classList.remove('active');
+}
+async function loadRule(ruleId) {
+    const row = document.querySelector(`[data-rule-id="${ruleId}"]`);
+    if (row) row.classList.add('loading');
+    try {
+        const resp = await fetch(`/api/rules/${ruleId}`);
+        const rule = await resp.json();
+        if (rule.error) { alert('Error: ' + rule.error); return; }
+        document.getElementById('rule_content').value = JSON.stringify(rule, null, 2);
+        document.getElementById('imported-rule-name').textContent = rule.name || 'Unknown';
+
+        const typeEl = document.getElementById('imported-rule-type');
+        const typeLabels = {
+            'query': 'KQL', 'eql': 'EQL', 'threshold': 'Threshold',
+            'machine_learning': 'ML', 'new_terms': 'New Terms',
+            'esql': 'ES|QL', 'threat_match': 'Indicator', 'saved_query': 'Saved'
+        };
+        typeEl.textContent = typeLabels[rule.type] || rule.type;
+        typeEl.className = 'type-badge type-' + (rule.type || 'query');
+
+        document.getElementById('imported-rule-source').textContent = 'Kibana';
+        document.getElementById('imported-rule-source').className = 'source-badge source-kibana';
+
+        // Kibana rules have their own index config — hide override
+        document.getElementById('index-override-group').style.display = 'none';
+        document.getElementById('index_override').value = '';
+
+        document.getElementById('imported-rule-group').style.display = 'block';
+        document.getElementById('no-rule-msg').style.display = 'none';
+        document.getElementById('analyse-btn').disabled = false;
+        closeImportModal();
+    } catch (err) {
+        alert('Failed to fetch rule: ' + err.message);
+    } finally {
+        if (row) row.classList.remove('loading');
+    }
+}
+
+/* ── Behavioral Protections (protections-artifacts) ────────────────────── */
+let bhSearchTimeout = null;
+let currentBHPlatform = '';
+
+function debounceBHSearch() {
+    clearTimeout(bhSearchTimeout);
+    bhSearchTimeout = setTimeout(() => fetchBehavioralRules(1), 300);
+}
+
+function fetchBehavioralRules(page) {
+    page = page || 1;
+    const search = document.getElementById('bh-rule-search').value;
+    const tactic = document.getElementById('bh-tactic-filter').value;
+    const params = new URLSearchParams({ search, platform: currentBHPlatform, tactic, page });
+
+    document.getElementById('bh-rules-list').innerHTML =
+        '<div class="loading-placeholder"><div class="spinner"></div>Loading behavioral rules...</div>';
+
+    fetch(`/api/behavioral-rules/list?${params}`)
+        .then(r => r.text())
+        .then(html => { document.getElementById('bh-rules-list').innerHTML = html; })
+        .catch(err => {
+            document.getElementById('bh-rules-list').innerHTML =
+                `<div class="test-result-error">Error: ${err.message}</div>`;
+        });
+}
+
+function setBHPlatform(btn, platform) {
+    currentBHPlatform = platform;
+    document.querySelectorAll('#behavioral-modal .platform-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    fetchBehavioralRules(1);
+}
+
+function openBehavioralModal() {
+    document.getElementById('behavioral-modal').classList.add('active');
+    fetchBehavioralRules(1);
+    // Load tactics for filter
+    fetch('/api/behavioral-rules/tactics')
+        .then(r => r.json())
+        .then(data => {
+            const select = document.getElementById('bh-tactic-filter');
+            const current = select.value;
+            select.innerHTML = '<option value="">All Tactics</option>';
+            (data.tactics || []).forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t; opt.textContent = t;
+                if (t === current) opt.selected = true;
+                select.appendChild(opt);
+            });
+        })
+        .catch(() => {});
+}
+
+function closeBehavioralModal(e) {
+    if (e && e.target !== document.getElementById('behavioral-modal')) return;
+    document.getElementById('behavioral-modal').classList.remove('active');
+}
+
+async function loadBehavioralRule(path) {
+    const row = document.querySelector(`[data-rule-path="${path}"]`);
+    if (row) row.classList.add('loading');
+    try {
+        const resp = await fetch(`/api/behavioral-rules/fetch?path=${encodeURIComponent(path)}`);
+        const rule = await resp.json();
+        if (rule.error) { alert('Error: ' + rule.error); return; }
+
+        document.getElementById('rule_content').value = JSON.stringify(rule, null, 2);
+        document.getElementById('imported-rule-name').textContent = rule.name || 'Unknown';
+
+        const typeEl = document.getElementById('imported-rule-type');
+        typeEl.textContent = 'EQL';
+        typeEl.className = 'type-badge type-eql';
+
+        document.getElementById('imported-rule-source').textContent = 'Behavioral';
+        document.getElementById('imported-rule-source').className = 'source-badge source-behavioral';
+
+        // Show index override with inferred index
+        const defaultIdx = (rule.index || ['logs-endpoint.events.*']).join(', ');
+        document.getElementById('default-index-display').textContent = defaultIdx;
+        document.getElementById('index-override-group').style.display = 'block';
+        document.querySelector('input[name="index_mode"][value="default"]').checked = true;
+        document.getElementById('index_override').style.display = 'none';
+        document.getElementById('index_override').value = '';
+
+        document.getElementById('imported-rule-group').style.display = 'block';
+        document.getElementById('no-rule-msg').style.display = 'none';
+        document.getElementById('analyse-btn').disabled = false;
+        document.getElementById('behavioral-modal').classList.remove('active');
+    } catch (err) {
+        alert('Failed to fetch rule: ' + err.message);
+    } finally {
+        if (row) row.classList.remove('loading');
+    }
+}
+
+/* ── Shared ──────────────────────────────────────────────────────── */
+function toggleCustomIndex() {
+    const mode = document.querySelector('input[name="index_mode"]:checked')?.value;
+    document.getElementById('index_override').style.display = mode === 'custom' ? 'block' : 'none';
+    if (mode === 'default') document.getElementById('index_override').value = '';
+}
+
+function clearRule() {
+    document.getElementById('rule_content').value = '';
+    document.getElementById('imported-rule-name').textContent = '';
+    document.getElementById('imported-rule-type').textContent = '';
+    document.getElementById('imported-rule-source').textContent = '';
+    document.getElementById('imported-rule-group').style.display = 'none';
+    document.getElementById('index-override-group').style.display = 'none';
+    document.getElementById('index_override').value = '';
+    document.getElementById('no-rule-msg').style.display = 'block';
+    document.getElementById('analyse-btn').disabled = true;
+}
+</script>
+
+<!-- Analysis History (always visible, JS-powered) -->
+<div class="panel" style="margin-top:4px">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <h2 class="panel-title">Analysis History</h2>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="text" id="hist-search" class="form-input form-input-sm"
+                   placeholder="Search rule name..." oninput="debounceHistory()" style="width:200px;">
+            <select id="hist-verdict" class="form-select" onchange="loadHistory(1)" style="width:auto;">
+                <option value="">All Verdicts</option>
+                <option value="approve">Low Noise</option>
+                <option value="review">Needs Tuning</option>
+                <option value="reject">High Noise</option>
+            </select>
+            <select id="hist-sort" class="form-select" onchange="loadHistory(1)" style="width:auto;">
+                <option value="created_at">Newest</option>
+                <option value="alerts_per_day">Noisiest</option>
+                <option value="fpr">Highest FPR</option>
+                <option value="rule_name">Name A-Z</option>
+            </select>
+        </div>
+    </div>
+    <div class="panel-body" style="padding:0">
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Rule</th>
+                        <th>Verdict</th>
+                        <th>Alerts</th>
+                        <th>Alerts/Day</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="hist-body">
+                    <tr><td colspan="6" class="dim" style="text-align:center;padding:24px;">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="hist-pagination" style="display:flex; justify-content:space-between; align-items:center; padding:10px 16px; border-top:1px solid var(--border);"></div>
+    </div>
+</div>
+
+<style>
+.btn-danger-ghost {
+    color: var(--eui-danger, #bd271e);
+    background: transparent;
+    border: 1px solid var(--eui-danger, #bd271e);
+    opacity: 0.7;
+    transition: opacity 0.2s, background 0.2s;
+}
+.btn-danger-ghost:hover {
+    opacity: 1;
+    background: rgba(189, 39, 30, 0.1);
+}
+.verdict-running {
+    background: rgba(0, 119, 204, 0.15);
+    color: var(--eui-primary, #0077cc);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.pulse-dot {
+    width: 8px; height: 8px;
+    background: var(--eui-primary, #0077cc);
+    border-radius: 50%;
+    animation: pulse-anim 1.4s ease-in-out infinite;
+}
+@keyframes pulse-anim {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+}
+.row-fade-out {
+    animation: fadeOut 0.3s ease forwards;
+}
+@keyframes fadeOut {
+    to { opacity: 0; height: 0; overflow: hidden; }
+}
+</style>
+<script>
+var histTimeout = null;
+var histPage = 1;
+
+function debounceHistory() {
+    clearTimeout(histTimeout);
+    histTimeout = setTimeout(function() { loadHistory(1); }, 300);
+}
+
+function loadHistory(page) {
+    histPage = page || 1;
+    var search = document.getElementById('hist-search').value;
+    var verdict = document.getElementById('hist-verdict').value;
+    var sortBy = document.getElementById('hist-sort').value;
+    var params = new URLSearchParams({
+        search: search, verdict: verdict, sort_by: sortBy, sort_order: 'desc', page: histPage, per_page: 15
+    });
+
+    fetch('/api/history?' + params)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var tbody = document.getElementById('hist-body');
+            var analyses = data.analyses || [];
+
+            if (analyses.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:24px;">No analyses found</td></tr>';
+                document.getElementById('hist-pagination').innerHTML = '';
+                return;
+            }
+
+            tbody.innerHTML = analyses.map(function(a) {
+                var verdictLabel = {'approve':'Low Noise','review':'Needs Tuning','reject':'High Noise'}[a.verdict] || 'Error';
+                var verdictClass = a.verdict || 'error';
+                var alerts = a.actual_alert_count >= 0 ? a.actual_alert_count : (a.noise_hits || 0);
+                var apd = a.alerts_per_day ? Math.round(a.alerts_per_day) : 0;
+
+                return '<tr id="analysis-row-' + a.id + '">' +
+                    '<td class="mono">' + (a.id || '').substring(0, 12) + '</td>' +
+                    '<td>' + (a.rule_name || 'N/A') + '</td>' +
+                    '<td><span class="verdict-badge verdict-' + verdictClass + '">' + verdictLabel + '</span></td>' +
+                    '<td>' + alerts + '</td>' +
+                    '<td>' + apd + '</td>' +
+                    '<td style="white-space:nowrap">' +
+                        '<a href="/report/' + a.id + '" class="btn btn-sm btn-outline">View</a> ' +
+                        '<button class="btn btn-sm btn-danger-ghost" onclick="deleteAnalysis(\'' + a.id + '\')">Delete</button>' +
+                    '</td></tr>';
+            }).join('');
+
+            // Pagination
+            var total = data.total || 0;
+            var perPage = data.per_page || 15;
+            var pages = Math.ceil(total / perPage);
+            var pag = document.getElementById('hist-pagination');
+
+            if (pages <= 1) {
+                pag.innerHTML = '<span class="dim">' + total + ' analyses</span>';
+                return;
+            }
+
+            var btns = '<span class="dim">' + total + ' analyses</span><div style="display:flex;gap:4px;">';
+            if (histPage > 1) btns += '<button class="btn btn-sm btn-ghost" onclick="loadHistory(' + (histPage - 1) + ')">Prev</button>';
+            btns += '<span class="dim" style="padding:4px 8px;">Page ' + histPage + '/' + pages + '</span>';
+            if (histPage < pages) btns += '<button class="btn btn-sm btn-ghost" onclick="loadHistory(' + (histPage + 1) + ')">Next</button>';
+            btns += '</div>';
+            pag.innerHTML = btns;
+        })
+        .catch(function() {
+            document.getElementById('hist-body').innerHTML =
+                '<tr><td colspan="6" class="dim" style="text-align:center;padding:24px;">Error loading history</td></tr>';
+        });
+}
+
+function deleteAnalysis(id) {
+    if (!confirm('Delete this analysis?')) return;
+    fetch('/api/analysis/' + id, { method: 'DELETE' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.deleted) {
+                var row = document.getElementById('analysis-row-' + id);
+                if (row) {
+                    row.classList.add('row-fade-out');
+                    setTimeout(function() { row.remove(); }, 300);
+                }
+            }
+        })
+        .catch(function(err) { alert('Failed to delete: ' + err.message); });
+}
+
+// Load history on page load
+document.addEventListener('DOMContentLoaded', function() { loadHistory(1); });
+</script>
+{% endblock %}

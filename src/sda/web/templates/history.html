@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Analysis History</h1>
+    <p class="page-subtitle">Browse past analyses, filter by verdict, and export reports</p>
+</div>
+
+<!-- Filters -->
+<div class="panel" style="margin-bottom: 20px;">
+    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        <input type="text" id="search-input" placeholder="Filter by rule name..." class="form-input" style="flex:1; min-width:200px;">
+        <select id="verdict-filter" class="form-select">
+            <option value="">All verdicts</option>
+            <option value="approve">Approve</option>
+            <option value="review">Review</option>
+            <option value="reject">Reject</option>
+        </select>
+        <select id="sort-select" class="form-select">
+            <option value="created_at">Newest first</option>
+            <option value="alerts_per_day">Most noisy</option>
+            <option value="fpr">Highest FPR</option>
+        </select>
+        <button onclick="loadHistory()" class="btn btn-primary">Apply</button>
+    </div>
+</div>
+
+<!-- Results -->
+<div class="panel">
+    <table class="data-table" id="history-table">
+        <thead>
+            <tr>
+                <th>Rule Name</th>
+                <th>Type</th>
+                <th>Severity</th>
+                <th>Verdict</th>
+                <th>Alerts/Day</th>
+                <th>FPR</th>
+                <th>Analysed</th>
+                <th style="width:120px;">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="history-body">
+            <tr><td colspan="8" class="dim" style="text-align:center; padding:40px;">Loading analyses&hellip;</td></tr>
+        </tbody>
+    </table>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
+        <span class="dim" id="history-count">&mdash;</span>
+        <div style="display:flex; gap:8px;">
+            <button onclick="changePage(-1)" class="btn btn-ghost" id="prev-btn" disabled>&larr; Previous</button>
+            <button onclick="changePage(1)" class="btn btn-ghost" id="next-btn">Next &rarr;</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentPage = 1;
+const perPage = 20;
+
+function loadHistory() {
+    const search = document.getElementById('search-input').value;
+    const verdict = document.getElementById('verdict-filter').value;
+    const sortBy = document.getElementById('sort-select').value;
+
+    fetch(`/api/history?page=${currentPage}&per_page=${perPage}&search=${encodeURIComponent(search)}&verdict=${verdict}&sort_by=${sortBy}&sort_order=desc`)
+        .then(r => r.json())
+        .then(data => {
+            const tbody = document.getElementById('history-body');
+            const count = document.getElementById('history-count');
+
+            if (!data.analyses || data.analyses.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="dim" style="text-align:center; padding:40px;">No analyses found. Run a rule through the Fine-Tuner to populate history.</td></tr>';
+                count.textContent = '0 results';
+                return;
+            }
+
+            count.textContent = data.total + ' total \u00b7 page ' + data.page;
+            document.getElementById('prev-btn').disabled = currentPage <= 1;
+            document.getElementById('next-btn').disabled = (currentPage * perPage) >= data.total;
+
+            tbody.innerHTML = data.analyses.map(a => {
+                const vc = {'approve':'badge-green','review':'badge-amber','reject':'badge-red'}[a.verdict] || '';
+                const date = new Date(a.created_at).toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+                const fpr = a.fpr ? (a.fpr * 100).toFixed(2) + '%' : '0.00%';
+                const apd = a.alerts_per_day ? a.alerts_per_day.toFixed(1) : '\u2014';
+                const sev = (a.severity || '\u2014').charAt(0).toUpperCase() + (a.severity || '').slice(1);
+
+                return '<tr>' +
+                    '<td><a href="/report/' + a.id + '" style="color:var(--primary);text-decoration:none;font-weight:500;">' + (a.rule_name || '\u2014') + '</a></td>' +
+                    '<td><span class="meta-tag meta-tag-type">' + (a.rule_type || '\u2014') + '</span></td>' +
+                    '<td>' + sev + '</td>' +
+                    '<td><span class="meta-tag ' + vc + '">' + (a.verdict || '\u2014').toUpperCase() + '</span></td>' +
+                    '<td class="mono">' + apd + '</td>' +
+                    '<td class="mono">' + fpr + '</td>' +
+                    '<td class="dim">' + date + '</td>' +
+                    '<td>' +
+                        '<a href="/api/export/' + a.id + '/json" class="btn btn-ghost" style="padding:2px 8px;font-size:12px;">Export</a> ' +
+                        '<button onclick="deleteAnalysis(\'' + a.id + '\')" class="btn btn-ghost" style="padding:2px 8px;font-size:12px;color:var(--red);">Delete</button>' +
+                    '</td>' +
+                '</tr>';
+            }).join('');
+        })
+        .catch(err => {
+            document.getElementById('history-body').innerHTML = '<tr><td colspan="8" class="dim" style="text-align:center;">Failed to load history</td></tr>';
+        });
+}
+
+function changePage(delta) {
+    currentPage = Math.max(1, currentPage + delta);
+    loadHistory();
+}
+
+function deleteAnalysis(id) {
+    if (!confirm('Delete this analysis? This cannot be undone.')) return;
+    fetch('/api/history/' + id, {method:'DELETE'}).then(() => loadHistory());
+}
+
+document.getElementById('search-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') loadHistory();
+});
+
+loadHistory();
+</script>
+{% endblock %}

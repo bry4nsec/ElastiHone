@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Settings</h1>
+    <p class="page-subtitle">Configure Elasticsearch, Kibana, and AI provider connections</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success">
+    <span class="alert-icon">&#10003;</span>
+    <span>{{ success }}</span>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-error">
+    <span class="alert-icon">!</span>
+    <span>{{ error }}</span>
+</div>
+{% endif %}
+
+<!-- Elasticsearch Configuration -->
+<div class="panel" id="es-settings">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            Elasticsearch Connection
+            <span class="connection-status {{ 'status-connected' if es_connected else 'status-disconnected' }}">
+                {{ '● Connected' if es_connected else '● Not connected' }}
+            </span>
+        </h2>
+    </div>
+    <div class="panel-body">
+        <form action="/settings" method="post">
+            <input type="hidden" name="section" value="es">
+
+            <div class="form-row">
+                <div class="form-group form-group-flex">
+                    <label for="es_url" class="form-label">Elasticsearch URL</label>
+                    <input type="text" name="es_url" id="es_url" class="form-input"
+                           value="{{ config.es.url }}" placeholder="https://your-elastic:9200">
+                </div>
+                <div class="form-group form-group-sm">
+                    <label for="es_verify_certs" class="form-label">Verify TLS</label>
+                    <select name="es_verify_certs" id="es_verify_certs" class="form-select">
+                        <option value="true" {{ 'selected' if config.es.verify_certs }}>Yes</option>
+                        <option value="false" {{ 'selected' if not config.es.verify_certs }}>No</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-group-half">
+                    <label for="es_username" class="form-label">Username</label>
+                    <input type="text" name="es_username" id="es_username" class="form-input"
+                           value="{{ config.es.username or '' }}" placeholder="elastic" autocomplete="off">
+                </div>
+                <div class="form-group form-group-half">
+                    <label for="es_password" class="form-label">Password</label>
+                    <input type="password" name="es_password" id="es_password" class="form-input"
+                           placeholder="Enter password" autocomplete="off">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="es_production_indices" class="form-label">Production Indices (comma-separated)</label>
+                <input type="text" name="es_production_indices" id="es_production_indices" class="form-input"
+                       value="{{ config.es.production_indices }}" placeholder="logs-*,winlogbeat-*,filebeat-*">
+            </div>
+
+            <div class="form-group-sm-inline" style="margin-bottom:14px">
+                <label for="es_noise_lookback_days" class="form-label" style="margin-bottom:0">Lookback Days</label>
+                <input type="number" name="es_noise_lookback_days" id="es_noise_lookback_days" class="form-input form-input-sm"
+                       value="{{ config.es.noise_lookback_days }}" min="1" max="90">
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save ES Configuration</button>
+                <button type="button" class="btn btn-outline" id="test-es-btn"
+                        hx-post="/api/es/test" hx-target="#es-test-result" hx-swap="innerHTML"
+                        hx-indicator="#es-test-spinner">
+                    <span id="es-test-spinner" class="htmx-indicator spinner"></span>
+                    Test Connection
+                </button>
+            </div>
+            <div id="es-test-result" class="test-result"></div>
+        </form>
+    </div>
+</div>
+
+<!-- Kibana Configuration -->
+<div class="panel" id="kb-settings">
+    <div class="panel-header">
+        <h2 class="panel-title">Kibana Connection</h2>
+    </div>
+    <div class="panel-body">
+        <form action="/settings" method="post">
+            <input type="hidden" name="section" value="kibana">
+
+            <div class="form-group">
+                <label for="es_kibana_url" class="form-label">Kibana URL</label>
+                <input type="text" name="es_kibana_url" id="es_kibana_url" class="form-input"
+                       value="{{ config.es.kibana_url or '' }}" placeholder="https://your-kibana:5601">
+            </div>
+
+            <div class="form-group">
+                <label for="es_kibana_space" class="form-label">Kibana Space <span class="dim">(leave empty for default space)</span></label>
+                <input type="text" name="es_kibana_space" id="es_kibana_space" class="form-input"
+                       value="{{ config.es.kibana_space or '' }}" placeholder="e.g. security">
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-group-half">
+                    <label for="es_kibana_username" class="form-label">Username</label>
+                    <input type="text" name="es_kibana_username" id="es_kibana_username" class="form-input"
+                           value="{{ config.es.kibana_username or '' }}" placeholder="Leave empty to use ES credentials" autocomplete="off">
+                </div>
+                <div class="form-group form-group-half">
+                    <label for="es_kibana_password" class="form-label">Password</label>
+                    <input type="password" name="es_kibana_password" id="es_kibana_password" class="form-input"
+                           placeholder="Leave empty to use ES credentials" autocomplete="off">
+                </div>
+            </div>
+
+            <p style="font-size:12px; color:var(--eui-text-muted); margin-top:-8px; margin-bottom:14px">
+                If left empty, Kibana will use the same credentials as Elasticsearch.
+            </p>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save Kibana Configuration</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- AI Provider Configuration -->
+<div class="panel" id="ai-settings">
+    <div class="panel-header">
+        <h2 class="panel-title">AI Provider</h2>
+    </div>
+    <div class="panel-body">
+        <form action="/settings" method="post">
+            <input type="hidden" name="section" value="llm">
+
+            <div class="form-group">
+                <label for="llm_provider" class="form-label">Provider</label>
+                <select name="llm_provider" id="llm_provider" class="form-select" onchange="toggleProviderFields()">
+                    <option value="openai" {{ 'selected' if config.llm.provider == 'openai' }}>OpenAI-compatible (Azure, custom, etc.)</option>
+                    <option value="anthropic" {{ 'selected' if config.llm.provider == 'anthropic' }}>Anthropic (Claude)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="llm_base_url" class="form-label">API Endpoint</label>
+                <input type="text" name="llm_base_url" id="llm_base_url" class="form-input"
+                       value="{{ config.llm.base_url }}"
+                       placeholder="https://api.openai.com/v1">
+            </div>
+
+            <div class="form-group">
+                <label for="llm_api_key" class="form-label">API Key</label>
+                <input type="password" name="llm_api_key" id="llm_api_key" class="form-input"
+                       placeholder="Enter API key (leave empty to keep current)" autocomplete="off">
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-group-half">
+                    <label for="llm_deployment_name" class="form-label">Model</label>
+                    <input type="text" name="llm_deployment_name" id="llm_deployment_name" class="form-input"
+                           value="{{ config.llm.deployment_name }}" placeholder="gpt-4o">
+                </div>
+                <div class="form-group form-group-quarter">
+                    <label for="llm_temperature" class="form-label">Temperature</label>
+                    <input type="number" name="llm_temperature" id="llm_temperature" class="form-input form-input-sm"
+                           value="{{ config.llm.temperature }}" min="0" max="2" step="0.1">
+                </div>
+                <div class="form-group form-group-quarter">
+                    <label for="llm_max_iterations" class="form-label">Max Iterations</label>
+                    <input type="number" name="llm_max_iterations" id="llm_max_iterations" class="form-input form-input-sm"
+                           value="{{ config.llm.max_iterations }}" min="1" max="10">
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save AI Configuration</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function toggleProviderFields() {
+    var provider = document.getElementById('llm_provider').value;
+    var urlInput = document.getElementById('llm_base_url');
+    var modelInput = document.getElementById('llm_deployment_name');
+    if (provider === 'anthropic') {
+        urlInput.placeholder = 'https://api.anthropic.com (leave empty for default)';
+        modelInput.placeholder = 'claude-sonnet-4-20250514';
+    } else {
+        urlInput.placeholder = 'https://api.openai.com/v1';
+        modelInput.placeholder = 'gpt-4o';
+    }
+}
+toggleProviderFields();
+</script>
+
+<!-- Current Config -->
+<div class="panel" id="config-debug">
+    <div class="panel-header">
+        <h2 class="panel-title">Current Configuration</h2>
+    </div>
+    <div class="panel-body">
+        <pre class="code-block"><code>{{ config_json }}</code></pre>
+    </div>
+</div>
+{% endblock %}

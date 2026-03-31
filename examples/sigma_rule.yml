@@ -1,0 +1,36 @@
+title: Suspicious PowerShell Download Cradle
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+status: experimental
+description: |
+  Detects PowerShell download cradle patterns commonly used to fetch
+  and execute malicious payloads from remote servers.
+author: ElastiHone Example
+date: 2025/01/15
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    process.name: 'powershell.exe'
+    process.command_line|contains:
+      - 'Invoke-WebRequest'
+      - 'Invoke-Expression'
+      - 'IEX'
+      - 'DownloadString'
+      - 'DownloadFile'
+      - 'Net.WebClient'
+      - 'Start-BitsTransfer'
+  filter_legitimate:
+    process.parent.name:
+      - 'sccm.exe'
+      - 'ccmexec.exe'
+  condition: selection and not filter_legitimate
+level: high
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.command_and_control
+  - attack.t1105
+falsepositives:
+  - Software deployment via SCCM
+  - Administrative PowerShell scripts

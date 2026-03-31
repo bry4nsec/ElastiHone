@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Bulk Analysis</h1>
+    <p class="page-subtitle">Analyse all enabled detection rules in a single batch and rank by noise level</p>
+</div>
+
+<!-- Controls -->
+<div class="panel" style="margin-bottom:20px;">
+    <div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
+        <div>
+            <label class="form-label" style="margin-right:8px;">Concurrency</label>
+            <select id="concurrency" class="form-select" style="width:auto;">
+                <option value="1">1 (sequential)</option>
+                <option value="2" selected>2 (default)</option>
+                <option value="3">3</option>
+                <option value="5">5 (fast)</option>
+            </select>
+        </div>
+        <div style="display:flex; gap:8px;">
+            <button onclick="startBulk()" class="btn btn-primary" id="start-btn">Start bulk analysis</button>
+            <button onclick="loadExceptions()" class="btn btn-ghost">View exceptions</button>
+            <button onclick="loadScheduled()" class="btn btn-ghost">Scheduled rules</button>
+        </div>
+    </div>
+</div>
+
+<!-- Active Run Status -->
+<div class="panel" id="run-panel" style="display:none; margin-bottom:20px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="font-weight:600; color:var(--text);">Bulk Run <span class="mono dim" id="run-id"></span></h3>
+        <span class="meta-tag" id="run-status">Running</span>
+    </div>
+    <div class="progress-track" style="margin-bottom:8px;">
+        <div class="progress-fill" id="run-progress" style="width:0%;"></div>
+    </div>
+    <div class="dim" id="run-counter">0 / 0 complete</div>
+</div>
+
+<!-- Results Table -->
+<div class="panel" id="results-panel" style="display:none;">
+    <h3 style="font-weight:600; color:var(--text); margin-bottom:16px;">Results &mdash; ranked by noise</h3>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Rule Name</th>
+                <th>Severity</th>
+                <th>Verdict</th>
+                <th>Alerts/Day</th>
+                <th>Actual Alerts</th>
+                <th>FPR</th>
+                <th>Duration</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+    </table>
+</div>
+
+<!-- Exceptions Modal -->
+<div class="panel" id="exceptions-panel" style="display:none; margin-top:20px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 style="font-weight:600; color:var(--text);">Applied Exceptions</h3>
+        <button onclick="document.getElementById('exceptions-panel').style.display='none'" class="btn btn-ghost" style="font-size:12px;">Close</button>
+    </div>
+    <table class="data-table">
+        <thead>
+            <tr><th>Rule</th><th>KQL Query</th><th>Kibana List ID</th><th>Status</th><th>Applied</th></tr>
+        </thead>
+        <tbody id="exceptions-body"></tbody>
+    </table>
+</div>
+
+<!-- Scheduled Rules Panel -->
+<div class="panel" id="scheduled-panel" style="display:none; margin-top:20px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 style="font-weight:600; color:var(--text);">Scheduled Re-analysis</h3>
+        <button onclick="document.getElementById('scheduled-panel').style.display='none'" class="btn btn-ghost" style="font-size:12px;">Close</button>
+    </div>
+    <table class="data-table">
+        <thead>
+            <tr><th>Rule Name</th><th>Source</th><th>Schedule</th><th>Last Verdict</th><th>Last Alert Count</th><th>Last Run</th></tr>
+        </thead>
+        <tbody id="scheduled-body"></tbody>
+    </table>
+</div>
+
+<script>
+let activeRunId = null;
+let pollInterval = null;
+
+function startBulk() {
+    const concurrency = parseInt(document.getElementById('concurrency').value);
+    document.getElementById('start-btn').disabled = true;
+    document.getElementById('start-btn').textContent = 'Starting\u2026';
+
+    fetch('/api/bulk/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({max_concurrent: concurrency})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            alert('Error: ' + data.error);
+            document.getElementById('start-btn').disabled = false;
+            document.getElementById('start-btn').textContent = 'Start bulk analysis';
+            return;
+        }
+
+        activeRunId = data.run_id;
+        document.getElementById('run-panel').style.display = 'block';
+        document.getElementById('run-id').textContent = activeRunId;
+        document.getElementById('run-status').textContent = 'Running';
+        document.getElementById('run-status').className = 'meta-tag badge-amber';
+        document.getElementById('results-panel').style.display = 'none';
+
+        pollInterval = setInterval(pollStatus, 3000);
+    })
+    .catch(() => {
+        document.getElementById('start-btn').disabled = false;
+        document.getElementById('start-btn').textContent = 'Start bulk analysis';
+    });
+}
+
+function pollStatus() {
+    if (!activeRunId) return;
+
+    fetch('/api/bulk/status/' + activeRunId)
+        .then(r => r.json())
+        .then(data => {
+            const pct = data.total > 0 ? ((data.completed + data.failed) / data.total * 100) : 0;
+            document.getElementById('run-progress').style.width = pct + '%';
+            document.getElementById('run-counter').textContent =
+                (data.completed + data.failed) + ' / ' + data.total + ' complete' +
+                (data.failed > 0 ? ' (' + data.failed + ' failed)' : '');
+
+            if (data.status === 'done') {
+                clearInterval(pollInterval);
+                document.getElementById('run-status').textContent = 'Complete';
+                document.getElementById('run-status').className = 'meta-tag badge-green';
+                document.getElementById('start-btn').disabled = false;
+                document.getElementById('start-btn').textContent = 'Start bulk analysis';
+                renderResults(data.results || []);
+            }
+        });
+}
+
+function renderResults(results) {
+    document.getElementById('results-panel').style.display = 'block';
+    const tbody = document.getElementById('results-body');
+
+    if (results.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="dim" style="text-align:center;padding:24px;">No results</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = results.map(r => {
+        const vc = {'approve':'badge-green','review':'badge-amber','reject':'badge-red','error':'badge-red'}[r.verdict] || '';
+        const apd = r.alerts_per_day ? r.alerts_per_day.toFixed(1) : '\u2014';
+        const actual = r.actual_alerts !== undefined ? r.actual_alerts.toLocaleString() : '\u2014';
+        const fpr = r.fpr ? (r.fpr * 100).toFixed(2) + '%' : '0.00%';
+        const dur = r.duration ? r.duration + 's' : '\u2014';
+        const statusBadge = r.status === 'error' ? 'badge-red' : 'badge-green';
+
+        return '<tr>' +
+            '<td style="font-weight:500;">' + (r.rule_name || '\u2014') + '</td>' +
+            '<td>' + (r.severity || '\u2014') + '</td>' +
+            '<td><span class="meta-tag ' + vc + '">' + (r.verdict || '\u2014').toUpperCase() + '</span></td>' +
+            '<td class="mono">' + apd + '</td>' +
+            '<td class="mono">' + actual + '</td>' +
+            '<td class="mono">' + fpr + '</td>' +
+            '<td class="dim">' + dur + '</td>' +
+            '<td><span class="meta-tag ' + statusBadge + '">' + (r.status || '\u2014').toUpperCase() + '</span></td>' +
+        '</tr>';
+    }).join('');
+}
+
+function loadExceptions() {
+    document.getElementById('exceptions-panel').style.display = 'block';
+    fetch('/api/exceptions')
+        .then(r => r.json())
+        .then(data => {
+            const tbody = document.getElementById('exceptions-body');
+            const list = Array.isArray(data) ? data : [];
+            if (list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="dim" style="text-align:center;padding:24px;">No exceptions applied yet</td></tr>';
+                return;
+            }
+            tbody.innerHTML = list.map(e => {
+                const date = e.created_at ? new Date(e.created_at).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) : '\u2014';
+                return '<tr>' +
+                    '<td>' + (e.rule_name || '\u2014') + '</td>' +
+                    '<td class="mono" style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;">' + (e.kql_query || '\u2014') + '</td>' +
+                    '<td class="mono dim">' + (e.kibana_list_id || '\u2014') + '</td>' +
+                    '<td><span class="meta-tag badge-green">' + (e.status || 'applied').toUpperCase() + '</span></td>' +
+                    '<td class="dim">' + date + '</td>' +
+                '</tr>';
+            }).join('');
+        });
+}
+
+function loadScheduled() {
+    document.getElementById('scheduled-panel').style.display = 'block';
+    fetch('/api/scheduled')
+        .then(r => r.json())
+        .then(data => {
+            const tbody = document.getElementById('scheduled-body');
+            const list = Array.isArray(data) ? data : [];
+            if (list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:24px;">No scheduled rules. Schedule rules via the API or after applying exceptions.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = list.map(s => {
+                const lastRun = s.last_run ? new Date(s.last_run).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) : 'Never';
+                return '<tr>' +
+                    '<td>' + (s.rule_name || '\u2014') + '</td>' +
+                    '<td class="dim">' + (s.rule_source || '\u2014') + '</td>' +
+                    '<td class="mono">' + (s.schedule_cron || '\u2014') + '</td>' +
+                    '<td><span class="meta-tag">' + (s.last_verdict || '\u2014').toUpperCase() + '</span></td>' +
+                    '<td class="mono">' + (s.last_alert_count != null ? s.last_alert_count.toLocaleString() : '\u2014') + '</td>' +
+                    '<td class="dim">' + lastRun + '</td>' +
+                '</tr>';
+            }).join('');
+        });
+}
+</script>
+{% endblock %}

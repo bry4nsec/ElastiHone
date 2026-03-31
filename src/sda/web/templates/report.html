@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if report.get('status') == 'running' %}
+<!-- Loading -->
+<div class="page-header">
+    <a href="/" class="btn btn-ghost">&larr; Back</a>
+    <h1 class="page-title">Analysing Rule</h1>
+    <p class="page-subtitle mono">{{ report.get('analysis_id', '') }}</p>
+</div>
+<div class="panel" style="text-align:center; padding: 60px 32px;">
+    <div class="analysis-spinner">
+        <div class="spinner-ring ring-outer"></div>
+        <div class="spinner-ring ring-inner"></div>
+    </div>
+    <h2 style="margin-top: 28px; color: var(--eui-title);">Analysis in Progress</h2>
+    <p class="dim" id="phase-text" style="margin-top: 10px; font-size: 14px;">
+        Initialising analysis engine&hellip;
+    </p>
+    <div class="progress-track">
+        <div class="progress-fill" id="progress-bar"></div>
+    </div>
+    <p class="dim" style="font-size: 12px; margin-top: 12px; opacity: 0.5;">
+        This page refreshes automatically when complete.
+    </p>
+</div>
+<style>
+.analysis-spinner {
+    position: relative;
+    width: 56px; height: 56px;
+    margin: 0 auto;
+}
+.spinner-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 3px solid transparent;
+}
+.ring-outer {
+    inset: 0;
+    border-top-color: var(--eui-primary, #0077cc);
+    border-right-color: var(--eui-primary, #0077cc);
+    animation: spin 1s linear infinite;
+}
+.ring-inner {
+    inset: 8px;
+    border-bottom-color: var(--eui-success, #00bfb3);
+    border-left-color: var(--eui-success, #00bfb3);
+    animation: spin 1.5s linear infinite reverse;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.progress-track {
+    width: 200px; height: 3px;
+    background: var(--eui-border, #343741);
+    border-radius: 2px;
+    margin: 16px auto 0;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%;
+    background: var(--eui-primary, #0077cc);
+    border-radius: 2px;
+    width: 0%;
+    animation: progress-sweep 8s ease-in-out infinite;
+}
+@keyframes progress-sweep {
+    0%   { width: 0%; margin-left: 0; }
+    50%  { width: 60%; margin-left: 20%; }
+    100% { width: 0%; margin-left: 100%; }
+}
+</style>
+<script>
+(function() {
+    var id = "{{ report.get('analysis_id', '') }}";
+    var phases = [
+        "Parsing rule definition\u2026",
+        "Querying production telemetry\u2026",
+        "Counting actual alerts\u2026",
+        "Computing differential report\u2026",
+        "Generating analysis summary\u2026",
+    ];
+    var pi = 0;
+    var phaseEl = document.getElementById('phase-text');
+    setInterval(function() {
+        pi = (pi + 1) % phases.length;
+        phaseEl.style.opacity = 0;
+        setTimeout(function() {
+            phaseEl.textContent = phases[pi];
+            phaseEl.style.opacity = 1;
+        }, 200);
+    }, 3000);
+    phaseEl.style.transition = 'opacity 0.2s ease';
+
+    setInterval(function() {
+        fetch('/api/status/' + id)
+            .then(function(r) { return r.json(); })
+            .then(function(d) { if (d.status !== 'running') window.location.reload(); })
+            .catch(function() {});
+    }, 3000);
+})();
+</script>
+
+{% else %}
+<!-- Report -->
+
+<!-- Header -->
+<div class="report-header">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <a href="/" class="btn btn-ghost">&larr; Back</a>
+        {% if report.get('rule_name') and kibana_url %}
+        <a href="{{ kibana_url }}{% if kibana_space %}/s/{{ kibana_space }}{% endif %}/app/security/alerts?query=(language:kuery,query:'kibana.alert.rule.name:(&quot;{{ report.rule_name }}&quot; OR &quot;Malicious Behavior Detection Alert: {{ report.rule_name }}&quot;)')&timerange=(global:(linkTo:!(),timerange:(from:now-7d,to:now)))" class="btn btn-ghost" target="_blank" rel="noopener" title="View alerts in Kibana">Open in Kibana</a>
+        {% endif %}
+    </div>
+    <div class="report-header-main">
+        <div class="report-header-left">
+            <h1 class="report-rule-name">{{ report.get('rule_name', 'Unknown Rule') }}</h1>
+            <div class="report-meta">
+                {% if report.get('rule_type') %}
+                <span class="meta-tag meta-tag-type">{{ report.rule_type | capitalize }}</span>
+                {% endif %}
+                {% if report.get('severity') %}
+                <span class="meta-tag meta-tag-severity-{{ report.get('severity', 'medium') }}">{{ report.severity | capitalize }}</span>
+                {% endif %}
+                {% if report.get('target_indices') %}
+                <span class="meta-tag meta-tag-index">{{ report.target_indices[0] }}</span>
+                {% endif %}
+                {% if report.get('mitre_techniques') %}
+                {% for tech in report.mitre_techniques[:3] %}
+                <a href="{{ tech | mitre_url }}" target="_blank" rel="noopener" class="meta-tag meta-tag-mitre" style="text-decoration:none;">{{ tech }}</a>
+                {% endfor %}
+                {% if report.mitre_techniques|length > 3 %}
+                <span class="meta-tag meta-tag-mitre" title="{{ report.mitre_techniques[3:] | join(', ') }}">+{{ report.mitre_techniques|length - 3 }}</span>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        <div class="report-verdict verdict-{{ report.get('verdict', 'error') }}">
+            {% if report.get('verdict') == 'approve' %}Low Noise
+            {% elif report.get('verdict') == 'review' %}Needs Tuning
+            {% elif report.get('verdict') == 'reject' %}High Noise
+            {% else %}Error{% endif %}
+        </div>
+    </div>
+    {% if report.get('verdict_reason') %}
+    <div class="verdict-breakdown">
+        <div class="verdict-pill verdict-pill-fpr">
+            FPR {{ "%.2f"|format(report.get('fpr', 0) * 100) }}%
+        </div>
+        <div class="verdict-pill">
+            {{ "{:,}".format(report.get('actual_alert_count', report.get('noise_hits', 0))) }} alerts
+        </div>
+        <div class="verdict-pill">
+            ~{{ "{:,.0f}".format(report.get('estimated_alerts_per_day', 0)) }} alerts/day
+        </div>
+    </div>
+    {% endif %}
+    <p class="report-subtitle mono dim">
+        {{ report.get('analysis_id', '') }}
+        {% if report.get('analysis_duration_seconds') %} &middot; {{ "%.1f"|format(report.analysis_duration_seconds) }}s{% endif %}
+    </p>
+</div>
+
+{% if report.get('error') %}
+<div class="panel panel-error">
+    <div class="panel-header">
+        <h2 class="panel-title" style="color: var(--red);">Analysis Failed</h2>
+    </div>
+    <div class="panel-body">
+        <pre class="code-block" style="color: var(--red); white-space: pre-wrap; word-break: break-word;"><code>{{ report.error }}</code></pre>
+    </div>
+</div>
+{% endif %}
+
+{% if report.get('fpr') is not none %}
+<!-- Metrics -->
+<div class="metrics-row">
+    <!-- Alerts -->
+    <div class="metric-card metric-card-primary">
+        <div class="metric-card-label">Alerts</div>
+        {% set alert_count = report.get('actual_alert_count', -1) %}
+        {% set predicted = report.get('predicted_alert_count', -1) %}
+        {% set suppression_fields = report.get('suppression_fields', []) %}
+        {% if alert_count >= 0 %}
+        <div class="metric-card-value">{{ "{:,}".format(alert_count) }} <span class="metric-unit">actual</span></div>
+        {% if predicted >= 0 and predicted != alert_count %}
+        <div class="metric-card-detail">Predicted: {{ "{:,}".format(predicted) }}{% if suppression_fields %} by {{ suppression_fields | join(', ') }}{% endif %}</div>
+        {% elif suppression_fields %}
+        <div class="metric-card-detail">Suppression: {{ suppression_fields | join(', ') }}{% if report.get('suppression_duration') %} &middot; {{ report.suppression_duration }}{% endif %}</div>
+        {% endif %}
+        {% elif predicted >= 0 %}
+        <div class="metric-card-value">{{ "{:,}".format(predicted) }} <span class="metric-unit">predicted</span></div>
+        {% if suppression_fields %}
+        <div class="metric-card-detail">by {{ suppression_fields | join(', ') }}{% if report.get('suppression_duration') %} &middot; {{ report.suppression_duration }}{% endif %}</div>
+        {% endif %}
+        {% else %}
+        <div class="metric-card-value">{{ "{:,}".format(report.noise_hits) }}</div>
+        <div class="metric-card-detail">no suppression</div>
+        {% endif %}
+    </div>
+
+    <!-- Raw Matches (hidden for behavioral/Elastic Agent rules where raw query can't run) -->
+    {% if not is_behavioral %}
+    <div class="metric-card">
+        <div class="metric-card-label">Raw Query Matches</div>
+        <div class="metric-card-value">{{ "{:,}".format(report.noise_hits) }}</div>
+        <div class="metric-card-detail">before suppression &amp; threshold</div>
+    </div>
+    {% endif %}
+
+    <!-- Alert Rate -->
+    <div class="metric-card">
+        <div class="metric-card-label">Alert Rate</div>
+        <div class="metric-card-value">{{ "%.1f"|format(report.estimated_alerts_per_day) }}<span class="metric-unit">/day</span></div>
+        <div class="metric-card-detail">{{ "%.2f"|format(report.estimated_alerts_per_hour) }}/hour</div>
+    </div>
+</div>
+
+<!-- AI Investigation -->
+{% if report.get('recommendations') %}
+<div class="panel panel-ai" id="ai-investigation">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            {% if report.recommendations|length == 1 and report.recommendations[0]|length > 200 %}
+            AI Investigation
+            {% else %}
+            Recommendations
+            {% endif %}
+        </h2>
+    </div>
+    <div class="panel-body">
+        {% for rec in report.recommendations %}
+            {% if rec|length > 200 %}
+            <div class="markdown-body">{{ rec | markdown }}</div>
+            {% else %}
+            <div class="recommendation-item">{{ rec }}</div>
+            {% endif %}
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Exclusion Queries -->
+{% if report.get('recommendations') %}
+{% set exclusions = report.recommendations | extract_kql %}
+{% if exclusions %}
+<div class="panel" id="exclusion-queries">
+    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <h2 class="panel-title">Exclusion Queries</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px;">
+                <input type="checkbox" id="select-all-exc" onchange="toggleAllExclusions(this)" checked> Select all
+            </label>
+            <button onclick="applySelectedExceptions()" class="btn btn-primary btn-sm" id="apply-selected-btn">Apply Selected</button>
+        </div>
+    </div>
+    <div class="panel-body">
+        <p class="dim" style="margin-bottom: 16px;">Select which exceptions to push to Kibana, or copy the KQL for manual use.</p>
+        <div id="apply-selected-result" style="display:none; margin-bottom:16px; padding:12px; border-radius:6px;"></div>
+        {% for exc in exclusions %}
+        <div style="margin-bottom: 20px; padding: 16px; background: var(--bg-card, #1d1e24); border-radius: 8px; border: 1px solid var(--eui-border, #343741);">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <input type="checkbox" class="exc-checkbox" data-entries='{{ exc.entries_json }}' checked style="width:16px; height:16px; cursor:pointer;">
+                <span class="mono" style="font-size: 13px; color: var(--eui-text-subdued, #98a2b3);">Exclusion {{ loop.index }}</span>
+                {% for field, value in exc.fields %}
+                <span class="meta-tag" style="font-size: 11px;">{{ field }}</span>
+                {% endfor %}
+            </div>
+            <div style="margin-bottom: 12px;">
+                <label class="dim" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">KQL Query</label>
+                <div style="position: relative;">
+                    <pre class="code-block" style="margin: 4px 0; padding-right: 60px;"><code id="kql-{{ loop.index }}">{{ exc.kql }}</code></pre>
+                    <button onclick="navigator.clipboard.writeText(document.getElementById('kql-{{ loop.index }}').textContent).then(function(){this.textContent='Copied!'}.bind(this)).catch(function(){})" style="position:absolute;top:8px;right:8px;padding:4px 10px;font-size:11px;background:var(--eui-primary,#0077cc);color:#fff;border:none;border-radius:4px;cursor:pointer;">Copy</button>
+                </div>
+            </div>
+            <details style="cursor: pointer;">
+                <summary class="dim" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Exception List JSON (API)</summary>
+                <pre class="code-block" style="margin-top: 4px; font-size: 12px;"><code>{{ exc.entries_json }}</code></pre>
+            </details>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Actual Alert Samples -->
+{% if report.get('sample_alerts') and report.sample_alerts|length > 0 %}
+<div class="panel" id="alert-samples">
+    <div class="panel-header">
+        <h2 class="panel-title">Recent Alerts</h2>
+    </div>
+    <div class="panel-body">
+        <table class="data-table" style="width: 100%;">
+            <thead>
+                <tr>
+                    <th style="width: 180px;">Timestamp</th>
+                    <th>Rule Name</th>
+                    <th>Severity</th>
+                    <th>Host</th>
+                    <th>User</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for alert in report.sample_alerts[:10] %}
+                <tr>
+                    <td class="mono" style="font-size: 12px;">{{ alert.get('@timestamp', 'N/A')[:19] }}</td>
+                    <td>{{ alert.get('kibana.alert.rule.name', alert.get('rule', {}).get('name', 'N/A'))[:60] }}</td>
+                    <td>
+                        {% set sev = alert.get('kibana.alert.severity', alert.get('signal', {}).get('rule', {}).get('severity', '')) %}
+                        {% if sev %}<span class="meta-tag meta-tag-severity-{{ sev }}">{{ sev | capitalize }}</span>{% else %}—{% endif %}
+                    </td>
+                    <td class="mono" style="font-size: 12px;">{{ alert.get('host', {}).get('name', alert.get('agent', {}).get('name', '—'))[:30] }}</td>
+                    <td class="mono" style="font-size: 12px;">{{ alert.get('user', {}).get('name', '—')[:30] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Refined Rule -->
+{% if report.get('refined_rule') %}
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">Refined Rule</h2>
+    </div>
+    <div class="panel-body">
+        <pre class="code-block"><code>{{ report.refined_rule | tojson(indent=2) }}</code></pre>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="report-actions">
+    <a href="/" class="btn btn-primary">&larr; New Analysis</a>
+</div>
+
+<script>
+function toggleAllExclusions(master) {
+    var cbs = document.querySelectorAll('.exc-checkbox');
+    cbs.forEach(function(cb) { cb.checked = master.checked; });
+}
+
+function applySelectedExceptions() {
+    var btn = document.getElementById('apply-selected-btn');
+    var cbs = document.querySelectorAll('.exc-checkbox:checked');
+    if (cbs.length === 0) {
+        alert('No exceptions selected');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Applying\u2026';
+
+    // Collect entries from selected checkboxes
+    var allEntries = [];
+    cbs.forEach(function(cb) {
+        try {
+            var parsed = JSON.parse(cb.getAttribute('data-entries'));
+            if (parsed.entries) allEntries.push(parsed.entries);
+            else if (Array.isArray(parsed)) allEntries.push(parsed);
+        } catch(e) { console.error('Failed to parse entry:', e); }
+    });
+
+    fetch('/api/exception/apply-recommended', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            rule_name: '{{ report.get("rule_name", "") }}',
+            rule_id: '{{ report.get("rule_id", "") }}',
+            analysis_id: '{{ report.get("analysis_id", "") }}',
+            entries: allEntries
+        })
+    })
+    .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t.substring(0, 200)); });
+        return r.json();
+    })
+    .then(function(data) {
+        var result = document.getElementById('apply-selected-result');
+        result.style.display = 'block';
+        if (data.status === 'applied') {
+            result.style.background = 'var(--green-bg, rgba(0,180,0,0.1))';
+            result.style.border = '1px solid var(--green-border, rgba(0,180,0,0.3))';
+            result.innerHTML = '<strong>' + cbs.length + ' exception(s) applied to Kibana</strong><br><span class="dim">' + (data.message || '') + '</span>';
+            btn.textContent = 'Applied';
+        } else {
+            result.style.background = 'var(--red-bg, rgba(200,0,0,0.1))';
+            result.style.border = '1px solid var(--red-border, rgba(200,0,0,0.3))';
+            result.innerHTML = '<strong>Could not apply</strong><br><span class="dim">' + (data.error || data.message || 'Unknown error') + '</span>';
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+        }
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = 'Apply Selected';
+        alert('Error: ' + err);
+    });
+}
+</script>
+
+{% endif %}
+{% endblock %}

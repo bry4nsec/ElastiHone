@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Detection Metrics</h1>
+    <p class="page-subtitle">Overview of all rule analyses and detection health</p>
+</div>
+
+<!-- ── Summary Cards ──────────────────────────────────────────────────── -->
+<div class="metrics-cards">
+    <div class="metric-card">
+        <div class="metric-value">{{ total_analyses }}</div>
+        <div class="metric-label">Total Analyses</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value">{{ unique_rules }}</div>
+        <div class="metric-label">Unique Rules</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-value">{{ total_alerts_per_day }}</div>
+        <div class="metric-label">Total Alerts/Day</div>
+    </div>
+    <div class="metric-card card-approve">
+        <div class="metric-value">{{ verdicts.approve }}</div>
+        <div class="metric-label">Low Noise</div>
+    </div>
+    <div class="metric-card card-review">
+        <div class="metric-value">{{ verdicts.review }}</div>
+        <div class="metric-label">Needs Tuning</div>
+    </div>
+    <div class="metric-card card-reject">
+        <div class="metric-value">{{ verdicts.reject }}</div>
+        <div class="metric-label">High Noise</div>
+    </div>
+</div>
+
+<!-- ── Verdict Distribution Bar ───────────────────────────────────────── -->
+{% if total_analyses > 0 %}
+<div class="panel" style="margin-top:4px">
+    <div class="panel-header">
+        <h2 class="panel-title">Verdict Distribution</h2>
+    </div>
+    <div class="panel-body">
+        <div class="verdict-bar">
+            {% if verdicts.approve > 0 %}
+            <div class="vbar-segment vbar-approve" style="width:{{ (verdicts.approve / total_analyses * 100)|round(1) }}%">
+                {{ verdicts.approve }}
+            </div>
+            {% endif %}
+            {% if verdicts.review > 0 %}
+            <div class="vbar-segment vbar-review" style="width:{{ (verdicts.review / total_analyses * 100)|round(1) }}%">
+                {{ verdicts.review }}
+            </div>
+            {% endif %}
+            {% if verdicts.reject > 0 %}
+            <div class="vbar-segment vbar-reject" style="width:{{ (verdicts.reject / total_analyses * 100)|round(1) }}%">
+                {{ verdicts.reject }}
+            </div>
+            {% endif %}
+            {% if verdicts.error > 0 %}
+            <div class="vbar-segment vbar-error" style="width:{{ (verdicts.error / total_analyses * 100)|round(1) }}%">
+                {{ verdicts.error }}
+            </div>
+            {% endif %}
+        </div>
+        <div class="verdict-legend">
+            <span class="legend-item"><span class="legend-dot dot-approve"></span> Low Noise</span>
+            <span class="legend-item"><span class="legend-dot dot-review"></span> Needs Tuning</span>
+            <span class="legend-item"><span class="legend-dot dot-reject"></span> High Noise</span>
+            {% if verdicts.error > 0 %}
+            <span class="legend-item"><span class="legend-dot dot-error"></span> Error</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- ── Per-Rule Analysis Table ────────────────────────────────────────── -->
+<div class="panel" style="margin-top:4px">
+    <div class="panel-header">
+        <h2 class="panel-title">Rule Status</h2>
+    </div>
+    <div class="panel-body" style="padding:0">
+        {% if rule_summaries %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Rule Name</th>
+                        <th>Type</th>
+                        <th>Severity</th>
+                        <th>Verdict</th>
+                        <th>Alerts</th>
+                        <th>Alerts/Day</th>
+                        <th>Runs</th>
+                        <th>Improvement</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rule_summaries %}
+                    <tr>
+                        <td class="rule-name-cell">{{ r.name }}</td>
+                        <td>
+                            {% if r.rule_type %}
+                            <span class="type-badge type-{{ r.rule_type }}">
+                                {{ {'query':'KQL','eql':'EQL','threshold':'Threshold','new_terms':'New Terms','esql':'ES|QL'}.get(r.rule_type, r.rule_type|upper) }}
+                            </span>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>
+                            {% if r.severity %}
+                            <span class="severity-badge severity-{{ r.severity }}">{{ r.severity }}</span>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>
+                            <span class="verdict-badge verdict-{{ r.latest_verdict }}">
+                                {% if r.latest_verdict == 'approve' %}Low Noise
+                                {% elif r.latest_verdict == 'review' %}Needs Tuning
+                                {% elif r.latest_verdict == 'reject' %}High Noise
+                                {% else %}Error{% endif %}
+                            </span>
+                        </td>
+                        <td>{{ r.latest_alerts }}</td>
+                        <td>{{ "%.1f"|format(r.latest_apd) if r.latest_apd else '0' }}</td>
+                        <td class="mono">{{ r.analyses_count }}</td>
+                        <td>
+                            {% if r.improvement_pct is not none %}
+                                {% if r.improvement_pct > 0 %}
+                                <span class="improvement-positive">↓ {{ r.improvement_pct }}%</span>
+                                {% elif r.improvement_pct < 0 %}
+                                <span class="improvement-negative">↑ {{ (r.improvement_pct * -1)|round(1) }}%</span>
+                                {% else %}
+                                <span class="improvement-neutral">— 0%</span>
+                                {% endif %}
+                            {% else %}
+                            <span class="dim">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/report/{{ r.latest_id }}" class="btn btn-sm btn-outline">View</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div style="padding: 40px; text-align: center;">
+            <p class="dim">No analyses yet. Go to the <a href="/">Fine-Tuner</a> to analyse your first rule.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<style>
+/* ── Metrics Cards ──────────────────────────────────────────────────── */
+.metrics-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 4px;
+}
+.metric-card {
+    background: var(--eui-panel-bg, #1d1e24);
+    border: 1px solid var(--eui-border, #343741);
+    border-radius: 8px;
+    padding: 20px 16px;
+    text-align: center;
+}
+.metric-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--eui-title, #dfe5ef);
+    line-height: 1;
+}
+.metric-label {
+    font-size: 12px;
+    color: var(--eui-subdued, #98a2b3);
+    margin-top: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.card-approve { border-color: rgba(0, 191, 179, 0.3); }
+.card-approve .metric-value { color: var(--eui-success, #00bfb3); }
+.card-review { border-color: rgba(254, 197, 20, 0.3); }
+.card-review .metric-value { color: var(--eui-warning, #fec514); }
+.card-reject { border-color: rgba(189, 39, 30, 0.3); }
+.card-reject .metric-value { color: var(--eui-danger, #bd271e); }
+
+/* ── Verdict Bar ────────────────────────────────────────────────────── */
+.verdict-bar {
+    display: flex;
+    height: 28px;
+    border-radius: 6px;
+    overflow: hidden;
+    gap: 2px;
+}
+.vbar-segment {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    min-width: 28px;
+    transition: width 0.5s ease;
+}
+.vbar-approve { background: var(--eui-success, #00bfb3); }
+.vbar-review  { background: var(--eui-warning, #fec514); color: #1d1e24; }
+.vbar-reject  { background: var(--eui-danger, #bd271e); }
+.vbar-error   { background: var(--eui-subdued, #535966); }
+
+.verdict-legend {
+    display: flex;
+    gap: 16px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--eui-subdued, #98a2b3);
+}
+.legend-item { display: flex; align-items: center; gap: 5px; }
+.legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+}
+.dot-approve { background: var(--eui-success, #00bfb3); }
+.dot-review  { background: var(--eui-warning, #fec514); }
+.dot-reject  { background: var(--eui-danger, #bd271e); }
+.dot-error   { background: var(--eui-subdued, #535966); }
+
+/* ── Improvement Indicators ─────────────────────────────────────────── */
+.improvement-positive {
+    color: var(--eui-success, #00bfb3);
+    font-weight: 600;
+    font-size: 13px;
+}
+.improvement-negative {
+    color: var(--eui-danger, #bd271e);
+    font-weight: 600;
+    font-size: 13px;
+}
+.improvement-neutral {
+    color: var(--eui-subdued, #98a2b3);
+    font-size: 13px;
+}
+</style>
+
+<script>
+document.getElementById('nav-metrics').classList.add('active');
+</script>
+{% endblock %}

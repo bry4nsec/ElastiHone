@@ -1,0 +1,47 @@
+{
+  "name": "Potential Reverse Shell via Suspicious Child Process",
+  "description": "Detects potential reverse shell activity by identifying suspicious child processes spawned from network-facing services like web servers or SSH daemons.",
+  "rule_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+  "type": "eql",
+  "language": "eql",
+  "query": "process where event.action == \"exec\" and process.parent.name in (\"nginx\", \"apache2\", \"httpd\", \"sshd\", \"vsftpd\") and process.name in (\"bash\", \"sh\", \"dash\", \"zsh\", \"python3\", \"python\", \"perl\", \"ruby\", \"nc\", \"ncat\")",
+  "severity": "high",
+  "risk_score": 75,
+  "index": [
+    "logs-endpoint.events.*",
+    "auditbeat-*"
+  ],
+  "tags": [
+    "Elastic",
+    "Linux",
+    "Threat Detection",
+    "Execution"
+  ],
+  "threat": [
+    {
+      "framework": "MITRE ATT&CK",
+      "tactic": {
+        "id": "TA0002",
+        "name": "Execution",
+        "reference": "https://attack.mitre.org/tactics/TA0002/"
+      },
+      "technique": [
+        {
+          "id": "T1059",
+          "name": "Command and Scripting Interpreter",
+          "reference": "https://attack.mitre.org/techniques/T1059/",
+          "subtechnique": [
+            {
+              "id": "T1059.004",
+              "name": "Unix Shell",
+              "reference": "https://attack.mitre.org/techniques/T1059/004/"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "interval": "5m",
+  "from": "now-6m",
+  "max_signals": 100
+}

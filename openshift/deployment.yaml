@@ -1,0 +1,202 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ElastiHone — OpenShift Deployment Manifests (v0.2.0)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Apply with: oc apply -f openshift/deployment.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+# ─── ConfigMap — Non-sensitive configuration ──────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sda-config
+  labels:
+    app: sda
+    app.kubernetes.io/name: sda
+    app.kubernetes.io/component: config
+data:
+  SDA_WEB_HOST: "0.0.0.0"
+  SDA_WEB_PORT: "8080"
+  SDA_ES_URL: "https://elasticsearch:9200"
+  SDA_ES_KIBANA_URL: "https://kibana:5601"
+  SDA_ES_KIBANA_SPACE: "siem"
+  SDA_ES_VERIFY_CERTS: "false"
+  SDA_ES_PRODUCTION_INDICES: "logs-*"
+  SDA_ES_NOISE_LOOKBACK_DAYS: "7"
+  SDA_LLM_BASE_URL: "https://api.openai.com/v1"
+  SDA_LLM_DEPLOYMENT_NAME: "gpt-5.2"
+  SDA_LLM_TEMPERATURE: "0.2"
+  SDA_LLM_MAX_ITERATIONS: "3"
+  SDA_LLM_AGENT_TIMEOUT: "5000"
+  # Frontend — React SPA served from this directory
+  SDA_FRONTEND_DIR: "/app/frontend-dist"
+  # Database — SQLite stored on persistent volume
+  SDA_DB_PATH: "/app/data/sda.db"
+
+---
+# ─── Secret — Sensitive credentials ──────────────────────────────────────────
+# IMPORTANT: Replace the base64 values with your actual credentials
+#   echo -n 'your-key' | base64
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sda-secrets
+  labels:
+    app: sda
+    app.kubernetes.io/name: sda
+    app.kubernetes.io/component: config
+type: Opaque
+data:
+  SDA_ES_USERNAME: ""           # base64-encoded ES username
+  SDA_ES_PASSWORD: ""           # base64-encoded ES password
+  SDA_ES_KIBANA_USERNAME: ""    # base64-encoded Kibana username (if different from ES)
+  SDA_ES_KIBANA_PASSWORD: ""    # base64-encoded Kibana password (if different from ES)
+  SDA_LLM_API_KEY: ""           # base64-encoded LLM API key
+  SDA_API_KEY: ""               # base64-encoded SDA API key (leave empty to disable auth)
+
+---
+# ─── PersistentVolumeClaim — SQLite storage ──────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sda-data
+  labels:
+    app: sda
+    app.kubernetes.io/name: sda
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# ─── Deployment ──────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sda
+  labels:
+    app: sda
+    app.kubernetes.io/name: sda
+    app.kubernetes.io/component: web
+    app.kubernetes.io/version: "0.2.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sda
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: sda
+        app.kubernetes.io/name: sda
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: sda
+          image: your-registry.example.com/elastihone:latest
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              name: http
+          envFrom:
+            - configMapRef:
+                name: sda-config
+            - secretRef:
+                name: sda-secrets
+          volumeMounts:
+            - name: sda-data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 20
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: sda-data
+          persistentVolumeClaim:
+            claimName: sda-data
+
+---
+# ─── Service ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: sda
+  labels:
+    app: sda
+    app.kubernetes.io/name: sda
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector:
+    app: sda
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+---
+# ─── Route (OpenShift-specific) ──────────────────────────────────────────────
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: sda
+  labels:
+    app: sda
+    app.kubernetes.io/name: sda
+    app.kubernetes.io/component: web
+  annotations:
+    haproxy.router.openshift.io/timeout: 600s
+spec:
+  to:
+    kind: Service
+    name: sda
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

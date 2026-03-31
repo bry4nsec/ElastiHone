@@ -1,0 +1,56 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ElastiHone — Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════════
+# Quick start:
+#   cp .env.example .env   # Edit with your ES/Kibana/LLM credentials
+#   docker compose up -d
+#   open http://localhost:8080
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  elastihone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: elastihone
+    restart: unless-stopped
+    ports:
+      - "${SDA_WEB_PORT:-8080}:8080"
+    environment:
+      # ── Elasticsearch ──────────────────────────────────────────────────
+      - SDA_ES_URL=${SDA_ES_URL:-https://localhost:9200}
+      - SDA_ES_API_KEY=${SDA_ES_API_KEY:-}
+      - SDA_ES_USERNAME=${SDA_ES_USERNAME:-}
+      - SDA_ES_PASSWORD=${SDA_ES_PASSWORD:-}
+      - SDA_ES_VERIFY_CERTS=${SDA_ES_VERIFY_CERTS:-true}
+      - SDA_ES_PRODUCTION_INDICES=${SDA_ES_PRODUCTION_INDICES:-logs-*}
+      - SDA_ES_NOISE_LOOKBACK_DAYS=${SDA_ES_NOISE_LOOKBACK_DAYS:-7}
+      # ── Kibana ─────────────────────────────────────────────────────────
+      - SDA_ES_KIBANA_URL=${SDA_ES_KIBANA_URL:-}
+      - SDA_ES_KIBANA_API_KEY=${SDA_ES_KIBANA_API_KEY:-}
+      - SDA_ES_KIBANA_USERNAME=${SDA_ES_KIBANA_USERNAME:-}
+      - SDA_ES_KIBANA_PASSWORD=${SDA_ES_KIBANA_PASSWORD:-}
+      - SDA_ES_KIBANA_SPACE=${SDA_ES_KIBANA_SPACE:-}
+      # ── LLM ────────────────────────────────────────────────────────────
+      - SDA_LLM_PROVIDER=${SDA_LLM_PROVIDER:-openai}
+      - SDA_LLM_BASE_URL=${SDA_LLM_BASE_URL:-}
+      - SDA_LLM_API_KEY=${SDA_LLM_API_KEY:-}
+      - SDA_LLM_DEPLOYMENT_NAME=${SDA_LLM_DEPLOYMENT_NAME:-gpt-4o}
+      - SDA_LLM_AGENT_TIMEOUT=${SDA_LLM_AGENT_TIMEOUT:-120}
+      # ── Auth & Security ────────────────────────────────────────────────
+      - SDA_API_KEY=${SDA_API_KEY:-}
+      - SDA_ENCRYPTION_KEY=${SDA_ENCRYPTION_KEY:-}
+      # ── Database ───────────────────────────────────────────────────────
+      - SDA_DATABASE_URL=${SDA_DATABASE_URL:-sqlite:///app/data/sda.db}
+    volumes:
+      - elastihone-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  elastihone-data:
+    driver: local
